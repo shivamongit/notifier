@@ -11,8 +11,11 @@ const CONFIG = {
   MOVIE_NAME: "dhurandhar",
   MOVIE_KEYWORDS: ["dhurandhar", "dhurandhar 2", "dhurandhar part 2", "dhurandhar the revenge", "dhurandhar: the revenge"],
 
-  // Target cinemas (lowercase for matching)
-  TARGET_CINEMAS: ["sln platinum", "aparna"],
+  // Target cinemas (lowercase for matching - multiple variants to catch all listings)
+  TARGET_CINEMAS: [
+    { keywords: ["sln platinum", "platinum movietime", "sln terminus", "platinum movietime cinemas, gachibowli"], label: "SLN Platinum (Gachibowli)" },
+    { keywords: ["aparna cinema", "aparna cine"], label: "Aparna Cinemas (Nallagandla)" },
+  ],
 
   // Target dates
   TARGET_DATES: ["2026-03-19", "2026-03-21"],
@@ -23,9 +26,9 @@ const CONFIG = {
   BMS_CITY_CODE: "HYDR",
   BMS_REGION: "hyderabad",
 
-  // District.in movie ID
-  DISTRICT_MOVIE_ID: "MV201380",
-  DISTRICT_SLUG: "dhurandhar-movie-tickets-in-hyderabad-MV201380",
+  // District.in movie ID (MV211577 = Dhurandhar: The Revenge, MV201380 = original Dhurandhar)
+  DISTRICT_MOVIE_ID: "MV211577",
+  DISTRICT_SLUG: "dhurandhar-the-revenge-movie-tickets-in-hyderabad-MV211577",
 
   // Check interval: every 5 minutes
   CRON_SCHEDULE: "*/5 * * * *",
@@ -156,36 +159,45 @@ async function checkBookMyShow() {
   }
 }
 
+// Helper: check if text matches any cinema keywords
+function matchCinema(text) {
+  const lower = text.toLowerCase();
+  for (const cinema of CONFIG.TARGET_CINEMAS) {
+    if (cinema.keywords.some((kw) => lower.includes(kw))) {
+      return cinema.label;
+    }
+  }
+  return null;
+}
+
 function processBookMyShowData(showDetails, date) {
   for (const venue of showDetails) {
-    const venueNameLower = (venue.VenueName || venue.CinemaName || "").toLowerCase();
-    for (const target of CONFIG.TARGET_CINEMAS) {
-      if (venueNameLower.includes(target)) {
-        const shows = venue.ShowTimes || venue.Shows || [];
-        const showInfo = shows.map((s) => s.ShowTime || s.Time || "").join(", ") || "Check app for times";
-        sendNotification(
-          `🎬 Dhurandhar 2 FOUND on ${date}!`,
-          `${venue.VenueName || venue.CinemaName} has shows on ${date}!\nTimes: ${showInfo}\nBook NOW on BookMyShow!`,
-          "urgent",
-          "rotating_light,movie_camera"
-        );
-      }
+    const venueName = venue.VenueName || venue.CinemaName || "";
+    const matched = matchCinema(venueName);
+    if (matched) {
+      const shows = venue.ShowTimes || venue.Shows || [];
+      const showInfo = shows.map((s) => s.ShowTime || s.Time || "").join(", ") || "Check app for times";
+      sendNotification(
+        `Dhurandhar 2 FOUND at ${matched} on ${date}!`,
+        `${venueName} has shows on ${date}!\nTimes: ${showInfo}\nBook NOW on BookMyShow!`,
+        "urgent",
+        "rotating_light,movie_camera"
+      );
     }
   }
 }
 
 function processBookMyShowCinemas(cinemas, date) {
   for (const cinema of cinemas) {
-    const cinemaName = (cinema.name || cinema.cinemaName || cinema.CinemaName || "").toLowerCase();
-    for (const target of CONFIG.TARGET_CINEMAS) {
-      if (cinemaName.includes(target)) {
-        sendNotification(
-          `🎬 Dhurandhar 2 FOUND on ${date}!`,
-          `${cinema.name || cinema.cinemaName || cinema.CinemaName} has shows on ${date}!\nBook NOW on BookMyShow!`,
-          "urgent",
-          "rotating_light,movie_camera"
-        );
-      }
+    const cinemaName = cinema.name || cinema.cinemaName || cinema.CinemaName || "";
+    const matched = matchCinema(cinemaName);
+    if (matched) {
+      sendNotification(
+        `Dhurandhar 2 FOUND at ${matched} on ${date}!`,
+        `${cinemaName} has shows on ${date}!\nBook NOW on BookMyShow!`,
+        "urgent",
+        "rotating_light,movie_camera"
+      );
     }
   }
 }
@@ -260,29 +272,31 @@ async function checkDistrict() {
 
 // ============== Generic raw text search ==============
 function checkRawDataForCinemas(text, date, source) {
+  const lower = text.toLowerCase();
   for (const cinema of CONFIG.TARGET_CINEMAS) {
-    if (text.includes(cinema)) {
+    const found = cinema.keywords.some((kw) => lower.includes(kw));
+    if (found) {
       if (date === "any") {
-        const hasDate = CONFIG.TARGET_DATE_LABELS.some((d) => text.includes(d));
-        if (hasDate || CONFIG.TARGET_DATES.some((d) => text.includes(d))) {
+        const hasDate = CONFIG.TARGET_DATE_LABELS.some((d) => lower.includes(d));
+        if (hasDate || CONFIG.TARGET_DATES.some((d) => lower.includes(d))) {
           sendNotification(
-            `Dhurandhar 2 - ${cinema.toUpperCase()} detected!`,
-            `${source} shows ${cinema} cinema with matching dates!\nCheck ${source} immediately to book!`,
+            `Dhurandhar 2 - ${cinema.label} detected!`,
+            `${source} shows ${cinema.label} with matching dates!\nCheck ${source} immediately to book!`,
             "urgent",
             "rotating_light,movie_camera"
           );
         } else {
           sendNotification(
-            `Dhurandhar 2 - ${cinema.toUpperCase()} listed!`,
-            `${source} mentions ${cinema} cinema for Dhurandhar 2.\nDates not confirmed yet - keep checking!\nTarget: Mar 19 & 21, 2026`,
+            `Dhurandhar 2 - ${cinema.label} listed!`,
+            `${source} mentions ${cinema.label} for Dhurandhar 2.\nDates not confirmed yet - keep checking!\nTarget: Mar 19 & 21, 2026`,
             "high",
             "movie_camera,eyes"
           );
         }
       } else {
         sendNotification(
-          `Dhurandhar 2 at ${cinema.toUpperCase()} on ${date}!`,
-          `${source} shows ${cinema} has Dhurandhar 2 on ${date}!\nBOOK NOW before seats fill up!`,
+          `Dhurandhar 2 at ${cinema.label} on ${date}!`,
+          `${source} shows ${cinema.label} has Dhurandhar 2 on ${date}!\nBOOK NOW before seats fill up!`,
           "urgent",
           "rotating_light,movie_camera"
         );
@@ -319,17 +333,18 @@ async function checkBMSShowtimesPage() {
         let extraData = "";
         $("script").each((_, el) => {
           const scriptContent = $(el).html() || "";
-          if (scriptContent.includes("sln") || scriptContent.includes("aparna") || scriptContent.includes("ShowDetails")) {
+          if (scriptContent.includes("sln") || scriptContent.includes("platinum movietime") || scriptContent.includes("aparna") || scriptContent.includes("ShowDetails")) {
             extraData += scriptContent.toLowerCase();
           }
         });
 
         const combined = pageText + " " + extraData;
         for (const cinema of CONFIG.TARGET_CINEMAS) {
-          if (combined.includes(cinema)) {
+          const found = cinema.keywords.some((kw) => combined.includes(kw));
+          if (found) {
             sendNotification(
-              `BOOK NOW! Dhurandhar 2 at ${cinema.toUpperCase()} on ${date}!`,
-              `BookMyShow confirms ${cinema} has shows on ${date}!\nLink: https://in.bookmyshow.com/movies/${CONFIG.BMS_REGION}/dhurandhar-part-2-the-revenge/buytickets/${eventId}/${dateForUrl}`,
+              `BOOK NOW! Dhurandhar 2 at ${cinema.label} on ${date}!`,
+              `BookMyShow confirms ${cinema.label} has shows on ${date}!\nLink: https://in.bookmyshow.com/movies/${CONFIG.BMS_REGION}/dhurandhar-the-revenge/buytickets/${eventId}/${dateForUrl}`,
               "urgent",
               "rotating_light,ticket"
             );
