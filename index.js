@@ -18,8 +18,8 @@ const CONFIG = {
   ],
 
   // Target dates
-  TARGET_DATES: ["2026-03-19", "2026-03-21"],
-  TARGET_DATE_LABELS: ["19 mar", "21 mar", "march 19", "march 21", "19/03", "21/03", "wed 19", "fri 21"],
+  TARGET_DATES: ["2026-03-21", "2026-03-22"],
+  TARGET_DATE_LABELS: ["21 mar", "22 mar", "march 21", "march 22", "21/03", "22/03", "sat 21", "sun 22"],
 
   // BookMyShow event IDs for Dhurandhar 2: The Revenge
   BMS_EVENT_IDS: ["ET00478890", "ET00478891"],
@@ -31,7 +31,7 @@ const CONFIG = {
   DISTRICT_SLUG: "dhurandhar-the-revenge-movie-tickets-in-hyderabad-MV211577",
 
   // Check interval: every 5 minutes
-  CRON_SCHEDULE: "*/5 * * * *",
+  CRON_SCHEDULE: "* * * * *",
 
   // Track already-sent notifications to avoid spam
   sentNotifications: new Set(),
@@ -545,11 +545,11 @@ async function runCheck() {
   console.log(`========================================`);
 
   // Stop checking after March 22, 2026
-  if (now > new Date("2026-03-22T00:00:00+05:30")) {
+  if (now > new Date("2026-03-23T00:00:00+05:30")) {
     console.log("[DONE] Past target dates. Stopping checks.");
     sendNotification(
       "Dhurandhar 2 Notifier Stopped",
-      "Target dates (Mar 19 & 21) have passed. Notifier is stopping.",
+      "Target dates (Mar 21 & 22) have passed. Notifier is stopping.",
       "low",
       "checkered_flag"
     );
@@ -604,14 +604,14 @@ server.listen(PORT, () => {
   console.log(`ntfy topic: ${CONFIG.NTFY_TOPIC}`);
   console.log(`Cinemas: ${CONFIG.TARGET_CINEMAS.map((c) => c.label).join(", ")}`);
   console.log(`Dates: ${CONFIG.TARGET_DATES.join(", ")}`);
-  console.log(`Checking every 5 minutes\n`);
+  console.log(`Checking every 1 minute\n`);
 });
 
 // ============== START ==============
 // Run immediately on startup
 runCheck();
 
-// Then schedule every 5 minutes
+// Then schedule every 1 minute
 cron.schedule(CONFIG.CRON_SCHEDULE, () => {
   runCheck();
 });
@@ -619,7 +619,7 @@ cron.schedule(CONFIG.CRON_SCHEDULE, () => {
 // Send startup notification
 sendNotification(
   "Dhurandhar 2 Notifier Started!",
-  `Monitoring BookMyShow & District.in for:\n- SLN Platinum (Gachibowli) & Aparna Cinemas (Nallagandla)\n- Dates: Mar 19 & 21, 2026\n- Checking every 5 minutes 24/7\n\nYou will get a notification with EXACT SHOWTIMES the moment shows are available.\nIf shows are NOT available yet, you will NOT be spammed.\nDaily status update at 8 AM IST.`,
+  `Monitoring BookMyShow & District.in for:\n- SLN Platinum (Gachibowli) & Aparna Cinemas (Nallagandla)\n- Dates: Mar 21 & 22, 2026\n- Checking every 1 minute 24/7\n\nYou will get a notification with EXACT SHOWTIMES the moment shows are available.\nIf shows are NOT available yet, you will NOT be spammed.\nDaily status update at 8 AM IST.`,
   "default",
   "rocket,movie_camera"
 );
