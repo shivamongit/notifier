@@ -202,72 +202,135 @@ function processBookMyShowCinemas(cinemas, date) {
   }
 }
 
-// ============== District.in CHECKER ==============
+// ============== District.in CHECKER (with showtime extraction) ==============
 async function checkDistrict() {
   console.log(`[DISTRICT] Checking District.in...`);
 
-  // Approach 1: District.in movie page
+  for (const date of CONFIG.TARGET_DATES) {
+    try {
+      const url = `https://www.district.in/movies/${CONFIG.DISTRICT_SLUG}?fromdate=${date}`;
+      const resp = await axios.get(url, {
+        headers: {
+          "User-Agent": randomUA(),
+          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "Accept-Language": "en-US,en;q=0.9",
+        },
+        timeout: 15000,
+      });
+
+      const $ = cheerio.load(resp.data);
+      const fullText = $.text();
+
+      // Extract cinema blocks: each cinema listing has a name followed by showtimes
+      for (const cinema of CONFIG.TARGET_CINEMAS) {
+        const matched = cinema.keywords.some((kw) => fullText.toLowerCase().includes(kw));
+        if (matched) {
+          // Try to extract showtimes near the cinema name
+          const showtimes = extractShowtimes(fullText, cinema.keywords);
+          const dateLabel = formatDateLabel(date);
+
+          if (showtimes.length > 0) {
+            const availableShows = showtimes.filter((s) => !s.soldOut);
+            const soldOutShows = showtimes.filter((s) => s.soldOut);
+
+            let msg = `YES! SHOWS AVAILABLE at ${cinema.label} on ${dateLabel}\n\n`;
+            if (availableShows.length > 0) {
+              msg += `AVAILABLE:\n${availableShows.map((s) => `  ${s.time}${s.format ? " (" + s.format + ")" : ""}`).join("\n")}\n`;
+            }
+            if (soldOutShows.length > 0) {
+              msg += `\nSOLD OUT:\n${soldOutShows.map((s) => `  ${s.time}${s.format ? " (" + s.format + ")" : ""}`).join("\n")}\n`;
+            }
+            msg += `\nBook: district.in/movies/${CONFIG.DISTRICT_SLUG}?fromdate=${date}`;
+
+            sendNotification(
+              `SHOWS AVAILABLE - ${cinema.label} - ${dateLabel}`,
+              msg,
+              "urgent",
+              "rotating_light,ticket"
+            );
+          } else {
+            // Cinema is listed but no specific showtimes could be parsed
+            sendNotification(
+              `${cinema.label} LISTED for ${dateLabel}`,
+              `${cinema.label} is listed on District.in for ${dateLabel} but exact showtimes could not be parsed.\nCheck manually: district.in/movies/${CONFIG.DISTRICT_SLUG}?fromdate=${date}`,
+              "high",
+              "movie_camera,eyes"
+            );
+          }
+        }
+      }
+
+      console.log(`[DISTRICT] Page for ${date}: ${fullText.length} chars`);
+    } catch (err) {
+      console.log(`[DISTRICT] Error for ${date}: ${err.message}`);
+    }
+  }
+
+  // Also check default page (no date filter) for general listing
   try {
     const url = `https://www.district.in/movies/${CONFIG.DISTRICT_SLUG}`;
     const resp = await axios.get(url, {
-      headers: {
-        "User-Agent": randomUA(),
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-      },
+      headers: { "User-Agent": randomUA(), Accept: "text/html" },
       timeout: 15000,
     });
-
     const html = resp.data.toLowerCase();
     checkRawDataForCinemas(html, "any", "District.in");
+  } catch (_) {}
+}
 
-    // Also parse structured data (JSON-LD or __NEXT_DATA__) from the page
-    const $ = cheerio.load(resp.data);
-    const nextDataEl = $("#__NEXT_DATA__").html();
-    if (nextDataEl) {
-      try {
-        const nextData = JSON.parse(nextDataEl);
-        const jsonStr = JSON.stringify(nextData).toLowerCase();
-        checkRawDataForCinemas(jsonStr, "any", "District.in-NextData");
-        console.log(`[DISTRICT] Parsed __NEXT_DATA__: ${jsonStr.length} chars`);
-      } catch (_) {}
-    }
+// Extract showtimes from page text near a cinema name
+function extractShowtimes(fullText, cinemaKeywords) {
+  const showtimes = [];
+  const lower = fullText.toLowerCase();
 
-    console.log(`[DISTRICT] Movie page: Got ${html.length} chars`);
-  } catch (err) {
-    console.log(`[DISTRICT] Web scrape error: ${err.message}`);
-  }
-
-  // Approach 2: Try District.in internal APIs with different known formats
-  for (const date of CONFIG.TARGET_DATES) {
-    const districtApis = [
-      `https://www.district.in/_next/data/movies/${CONFIG.DISTRICT_MOVIE_ID}/showtimes.json?city=hyderabad&date=${date}`,
-      `https://www.district.in/api/v1/movies/${CONFIG.DISTRICT_MOVIE_ID}/showtimes?city=hyderabad&date=${date}`,
-      `https://www.district.in/movies/showtimes/${CONFIG.DISTRICT_MOVIE_ID}?city=hyderabad&date=${date}`,
-    ];
-
-    for (const apiUrl of districtApis) {
-      try {
-        const resp = await axios.get(apiUrl, {
-          headers: {
-            "User-Agent": randomUA(),
-            Accept: "application/json, text/plain, */*",
-            Referer: `https://www.district.in/movies/${CONFIG.DISTRICT_SLUG}`,
-          },
-          timeout: 10000,
-        });
-
-        const data = resp.data;
-        if (data) {
-          const jsonStr = JSON.stringify(data).toLowerCase();
-          checkRawDataForCinemas(jsonStr, date, "District.in-API");
-          console.log(`[DISTRICT] API hit for ${date}: ${jsonStr.length} chars`);
-        }
-      } catch (_) {
-        // Expected to fail for some endpoints
-      }
+  // Find the position of the cinema name in the text
+  let cinemaPos = -1;
+  for (const kw of cinemaKeywords) {
+    const idx = lower.indexOf(kw);
+    if (idx !== -1) {
+      cinemaPos = idx;
+      break;
     }
   }
+  if (cinemaPos === -1) return showtimes;
+
+  // Extract a chunk of text after the cinema name (showtimes are listed right after)
+  const chunk = fullText.substring(cinemaPos, cinemaPos + 1000);
+
+  // Match time patterns like "05:30 PM", "10:00 PM", etc.
+  const timeRegex = /(\d{1,2}:\d{2}\s*[AP]M)/gi;
+  const matches = [...chunk.matchAll(timeRegex)];
+
+  for (const match of matches) {
+    const time = match[1].trim();
+    const posAfterTime = match.index + match[0].length;
+    const afterTime = chunk.substring(posAfterTime, posAfterTime + 80).toLowerCase();
+
+    const soldOut = afterTime.includes("no tickets") || afterTime.includes("sold out") || afterTime.includes("not available");
+
+    // Check for format tags like DOLBY ATMOS, RECLINER, ATMOS etc.
+    let format = "";
+    const formatMatch = afterTime.match(/(dolby\s*atmos|atmos|recliner|dolby\s*7\.1|laser|4dx|imax)/i);
+    if (formatMatch) format = formatMatch[1].toUpperCase();
+
+    // Also check text before the time for format
+    if (!format) {
+      const beforeTime = chunk.substring(Math.max(0, match.index - 40), match.index).toLowerCase();
+      const beforeMatch = beforeTime.match(/(dolby\s*atmos|atmos|recliner|dolby\s*7\.1|laser|4dx|imax)/i);
+      if (beforeMatch) format = beforeMatch[1].toUpperCase();
+    }
+
+    showtimes.push({ time, soldOut, format });
+  }
+
+  return showtimes;
+}
+
+function formatDateLabel(dateStr) {
+  const d = new Date(dateStr + "T00:00:00+05:30");
+  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `${days[d.getDay()]}, ${months[d.getMonth()]} ${d.getDate()}`;
 }
 
 // ============== Generic raw text search ==============
@@ -276,29 +339,36 @@ function checkRawDataForCinemas(text, date, source) {
   for (const cinema of CONFIG.TARGET_CINEMAS) {
     const found = cinema.keywords.some((kw) => lower.includes(kw));
     if (found) {
+      // Try to extract showtimes from raw text
+      const showtimes = extractShowtimes(text, cinema.keywords);
+      const timesStr = showtimes.length > 0
+        ? showtimes.map((s) => `${s.time}${s.soldOut ? " (SOLD OUT)" : ""}${s.format ? " [" + s.format + "]" : ""}`).join(", ")
+        : "Could not parse times";
+
       if (date === "any") {
         const hasDate = CONFIG.TARGET_DATE_LABELS.some((d) => lower.includes(d));
         if (hasDate || CONFIG.TARGET_DATES.some((d) => lower.includes(d))) {
           sendNotification(
-            `Dhurandhar 2 - ${cinema.label} detected!`,
-            `${source} shows ${cinema.label} with matching dates!\nCheck ${source} immediately to book!`,
+            `SHOWS FOUND - ${cinema.label}!`,
+            `YES! ${source} shows ${cinema.label} has Dhurandhar 2!\nShowtimes: ${timesStr}\nCheck ${source} immediately to book!`,
             "urgent",
             "rotating_light,movie_camera"
           );
         } else {
           sendNotification(
-            `Dhurandhar 2 - ${cinema.label} listed!`,
-            `${source} mentions ${cinema.label} for Dhurandhar 2.\nDates not confirmed yet - keep checking!\nTarget: Mar 19 & 21, 2026`,
+            `${cinema.label} listed (dates not confirmed)`,
+            `${source} mentions ${cinema.label} for Dhurandhar 2.\nShowtimes: ${timesStr}\nTarget dates (Mar 19 & 21) NOT confirmed yet - keep checking!`,
             "high",
             "movie_camera,eyes"
           );
         }
       } else {
+        const dateLabel = formatDateLabel(date);
         sendNotification(
-          `Dhurandhar 2 at ${cinema.label} on ${date}!`,
-          `${source} shows ${cinema.label} has Dhurandhar 2 on ${date}!\nBOOK NOW before seats fill up!`,
+          `SHOWS AVAILABLE - ${cinema.label} - ${dateLabel}!`,
+          `YES! ${cinema.label} has Dhurandhar 2 on ${dateLabel}!\nShowtimes: ${timesStr}\nBOOK NOW before seats fill up!\n\nBookMyShow: in.bookmyshow.com/movies/hyderabad/dhurandhar-the-revenge/buytickets/ET00478890\nDistrict: district.in/movies/${CONFIG.DISTRICT_SLUG}?fromdate=${date}`,
           "urgent",
-          "rotating_light,movie_camera"
+          "rotating_light,ticket"
         );
       }
     }
@@ -410,6 +480,63 @@ async function checkGoogleFallback() {
   }
 }
 
+// ============== DAILY STATUS SUMMARY ==============
+let lastSummaryDate = "";
+async function sendDailySummary() {
+  const now = new Date();
+  const todayStr = now.toISOString().split("T")[0];
+  if (lastSummaryDate === todayStr) return;
+
+  // Send summary at 8 AM IST (2:30 UTC)
+  const istHour = (now.getUTCHours() + 5.5) % 24;
+  if (istHour < 8 || istHour > 9) return;
+
+  lastSummaryDate = todayStr;
+
+  let summary = `DAILY STATUS - ${formatDateLabel(todayStr)}\n\n`;
+  for (const cinema of CONFIG.TARGET_CINEMAS) {
+    summary += `${cinema.label}:\n`;
+    for (const date of CONFIG.TARGET_DATES) {
+      const dateLabel = formatDateLabel(date);
+      // Check District.in for this cinema+date
+      try {
+        const url = `https://www.district.in/movies/${CONFIG.DISTRICT_SLUG}?fromdate=${date}`;
+        const resp = await axios.get(url, {
+          headers: { "User-Agent": randomUA(), Accept: "text/html" },
+          timeout: 15000,
+        });
+        const $page = cheerio.load(resp.data);
+        const fullText = $page.text();
+        const lower = fullText.toLowerCase();
+        const found = cinema.keywords.some((kw) => lower.includes(kw));
+        if (found) {
+          const showtimes = extractShowtimes(fullText, cinema.keywords);
+          if (showtimes.length > 0) {
+            const avail = showtimes.filter((s) => !s.soldOut);
+            summary += `  ${dateLabel}: YES (${avail.length} available, ${showtimes.length - avail.length} sold out)\n`;
+            summary += `    Times: ${showtimes.map((s) => s.time + (s.soldOut ? "[SOLD]" : "")).join(", ")}\n`;
+          } else {
+            summary += `  ${dateLabel}: LISTED (times not parsed)\n`;
+          }
+        } else {
+          summary += `  ${dateLabel}: NOT AVAILABLE YET\n`;
+        }
+      } catch (_) {
+        summary += `  ${dateLabel}: Could not check\n`;
+      }
+    }
+    summary += "\n";
+  }
+  summary += "Notifier is running 24/7. You will get an instant alert when shows open.";
+
+  sendNotification(
+    `Daily Status - Dhurandhar 2 Notifier`,
+    summary,
+    "default",
+    "clipboard,movie_camera"
+  );
+}
+
 // ============== MAIN CHECK FUNCTION ==============
 async function runCheck() {
   const now = new Date();
@@ -439,6 +566,11 @@ async function runCheck() {
   } catch (err) {
     console.error(`[ERROR] Check failed:`, err.message);
   }
+
+  // Try sending daily summary (only sends once per day at 8 AM IST)
+  try {
+    await sendDailySummary();
+  } catch (_) {}
 
   console.log(`[CHECK] Done. Next check in 5 minutes.`);
 }
@@ -470,7 +602,7 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, () => {
   console.log(`\nDhurandhar 2 Notifier Server running on port ${PORT}`);
   console.log(`ntfy topic: ${CONFIG.NTFY_TOPIC}`);
-  console.log(`Cinemas: ${CONFIG.TARGET_CINEMAS.join(", ")}`);
+  console.log(`Cinemas: ${CONFIG.TARGET_CINEMAS.map((c) => c.label).join(", ")}`);
   console.log(`Dates: ${CONFIG.TARGET_DATES.join(", ")}`);
   console.log(`Checking every 5 minutes\n`);
 });
@@ -487,7 +619,7 @@ cron.schedule(CONFIG.CRON_SCHEDULE, () => {
 // Send startup notification
 sendNotification(
   "Dhurandhar 2 Notifier Started!",
-  `Monitoring:\n- BookMyShow & District.in\n- SLN Platinum & Aparna Cinemas\n- Dates: Mar 19 & 21, 2026\n- Checking every 5 minutes`,
+  `Monitoring BookMyShow & District.in for:\n- SLN Platinum (Gachibowli) & Aparna Cinemas (Nallagandla)\n- Dates: Mar 19 & 21, 2026\n- Checking every 5 minutes 24/7\n\nYou will get a notification with EXACT SHOWTIMES the moment shows are available.\nIf shows are NOT available yet, you will NOT be spammed.\nDaily status update at 8 AM IST.`,
   "default",
   "rocket,movie_camera"
 );
